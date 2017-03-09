@@ -36,8 +36,8 @@ Analyze to your heart's content.  Remember: this workbench is only a starting po
 
 Take a look:
 
-[[doc/Body measurements 1.png|alt=Body measurements (1)]]
+![Body measurements (1)](doc/Body measurements 1.png)
 
-[[doc/Body measurements 2.png|alt=Body measurements (2)]]
+![Body measurements (2)](doc/Body measurements 2.png)
 
-[[doc/Weight lifting.png|alt=Weight lifting]]
+![Weight lifting](doc/Weight lifting.png)
