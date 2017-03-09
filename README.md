@@ -24,7 +24,7 @@ Create your fitness tracker spreadsheet according to these instructions:
   * The sheet must have the following labels starting at A1:
     * Date  |  Exercise name  |  Repetitions  |  Weight  |  Notes
   * Start tracking exercises.  Each line on the table must describe a set.
-    * For reference, each cell on the table starting at A2 must be in the following format:
+  * For reference, each cell on the table starting at A2 must be in the following format:
     * date  /  string     /   integer  /  float or formula  /      string
 * Any other sheets are your own to do whatever you want with.
 
