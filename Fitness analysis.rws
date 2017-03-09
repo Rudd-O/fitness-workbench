@@ -1,0 +1,270 @@
+#!/usr/bin/env python
+
+# vim: tabstop=8 expandtab shiftwidth=4 softtabstop=4
+
+import csv
+import datetime
+import itertools
+import os
+import subprocess
+
+import numpy as np
+from scipy import signal as sig
+from matplotlib import dates
+import matplotlib.pyplot as plt
+
+from replot import Axes as OldAxes
+from replot import PlotWidget as OldPlotWidget
+from replot import custom_result, Figure, _PlotResultCanvas
+import gtk.gdk
+
+
+# Variable definitions for fitness data acquisition.
+
+# Folder that contains the spreadsheet.
+folder = os.path.join(os.getenv("HOME"), "Documents", "Fitness")
+
+# File name of the spreadsheet.
+filename = "Fitness tracker.ods"
+
+# Sheet that contains measurements.
+# Sheet must be named as per this variable.
+# The sheet must have the following labels starting at A1:
+#   Date    Exercise name    Repetitions      Weight           Notes
+# Each line on the table must describe an exercise set.
+# Each cell on the table starting at A2 must be in the following format:
+#   date    string           integer          float/formula    string
+measurements_f = "Measurements tracker"
+
+# Sheet that contains exercises.
+# Sheet must be named as per this variable.
+# The sheet must have the following labels starting at A1:
+#   Date    Measurement      Value            Unit             Notes
+# Each line on the table must describe a measurement (e.g. of your body).
+# Each cell on the table starting at A2 must be in the following format:
+#   date    string           float/formula    string           string
+exercise_f = "Exercise tracker"
+
+
+class PlotWidget(OldPlotWidget):
+
+    def __init__(self, result, width=None, height=None):
+        apply(custom_result.ResultWidget.__init__, (self,))
+
+        if width and height:
+            figsize=(width, height)
+        elif result.display == 'side':
+           figsize=(9,6)
+        else:
+           figsize=(12,6)
+
+        self.figure = Figure(facecolor='white', figsize=figsize)
+        self.canvas = _PlotResultCanvas(self.figure)
+
+        self.axes = self.figure.add_subplot(111)
+
+        self.add_events(gtk.gdk.BUTTON_PRESS_MASK | gtk.gdk.BUTTON_RELEASE)
+
+        self.cached_contents = None
+
+
+class Axes(OldAxes):
+
+    def __init__(self, width=None, height=None, subplots_adjust_parms=None):
+        apply(OldAxes.__init__, (self,))
+        self.figure_width = width
+        self.figure_height = height
+        self.subplots_adjust_parms = subplots_adjust_parms
+
+    def create_widget(self):
+        widget = PlotWidget(self, self.figure_width, self.figure_height)
+        self.figure = widget.figure
+        if self.subplots_adjust_parms:
+            self.figure.subplots_adjust(**self.subplots_adjust_parms)
+        self._replay(widget.axes)
+        return widget
+
+
+def merge_over_time(datapoints, func):
+    new_dates, indices = np.unique(datapoints['dates'], return_index=True)
+    new_data = np.zeros(len(indices), dtype=float)
+    for n, idx in enumerate(np.nditer(indices)):
+        try:
+            value = func(datapoints['values'][idx:indices[n+1]])
+        except IndexError:
+            value = func(datapoints['values'][idx:])
+        new_data[n] = value
+    return {
+        'dates': new_dates,
+        'values': new_data,
+        'unit': datapoints['unit']
+    }
+
+
+def sum_over_time(datapoints):
+    return merge_over_time(datapoints, sum)
+
+
+def mean_over_time(datapoints):
+    return merge_over_time(datapoints, np.average)
+
+
+def strpdate(d):
+    return datetime.datetime.strptime(d, "%Y-%m-%d").date()
+
+
+def extract_data():
+    measurements_p = os.path.join(folder, measurements_f + ".csv")
+    exercise_p = os.path.join(folder, exercise_f + ".csv")
+
+    odsmtime = os.stat(os.path.join(folder, filename)).st_mtime
+    try:
+        csvmtime1 = os.stat(measurements_p)
+        csvmtime2 = os.stat(exercise_p)
+    except Exception:
+        csvmtime1 = 0
+        csvmtime2 = 0
+
+
+    if odsmtime > csvmtime1 or odsmtime > csvmtime2:
+        apply(subprocess.check_call, ([
+            "ssconverter", "-m",
+            os.path.join(folder, filename) + ":" + measurements_f,
+            measurements_p
+        ],))
+        apply(subprocess.check_call, ([
+            "ssconverter", "-m",
+            os.path.join(folder, filename) + ":" + exercise_f,
+            exercise_p
+        ],))
+
+    reps_data = {}
+    weight_data = {}
+
+    with open(exercise_p) as f:
+        reader = csv.reader(f, delimiter=",")
+        for date, exercise, reps, weight, _ in reader:
+            if date == "Date": continue
+            if exercise not in reps_data:
+                reps_data[exercise] = []
+            if exercise not in weight_data:
+                weight_data[exercise] = []
+            reps_data[exercise].append([
+                date,
+                float(reps),
+                "reps",
+            ])
+            weight_data[exercise].append([
+                date,
+                float(weight),
+                "lb"
+            ])
+
+    measurements_data = {}
+
+    with open(measurements_p) as f:
+        reader = csv.reader(f, delimiter=",")
+        for date, measurement, value, unit, _ in reader:
+            if date == "Date": continue
+            if value == "": continue
+            if measurement not in measurements_data:
+                measurements_data[measurement] = []
+            measurements_data[measurement].append([
+                date,
+                float(value),
+                unit
+            ])
+
+    def numpyize(stuff):
+        res = {}
+        for k, v in stuff.items():
+            data = np.array([np.array(xi) for xi in v])
+            data = data.transpose()
+            data_dates = np.array([dates.datestr2num(x) for x in data[0]])
+            data_values = np.array([float(x) for x in data[1]])
+            res[k] = {
+                'dates': data_dates,
+                'values': data_values,
+                'unit': data[2][0]
+            }
+        return res
+
+    return [numpyize(x) for x in [reps_data, weight_data, measurements_data]]
+
+
+BARS = "bars"
+LINES = "lines"
+
+def smooth(x,window_len=11,polyorder=3):
+    return sig.savgol_filter(x, window_len, polyorder)
+
+
+def plot_over_time(exercise_data,
+                   same_date_merge_func=None,
+                   bar_width=10,
+                   trend_line_width=2,
+                   width=9,
+                   height=3,
+                   zero_based=True,
+                   type=BARS,
+                   title=None):
+    if same_date_merge_func:
+        exercise_data = same_date_merge_func(exercise_data)
+
+    data_dates = exercise_data['dates']
+    data_values = exercise_data['values']
+    if zero_based:
+        data_zeros = np.array([0.0 for x in exercise_data['values']])
+    else:
+        mindata = np.min(data_values)
+        data_zeros = np.array([mindata for x in exercise_data['values']])
+
+    axes = Axes(width=width, height=height, subplots_adjust_parms={'bottom': 0.11})
+    if type == BARS:
+        axes.vlines(data_dates, data_zeros, data_values, lw=bar_width)
+    else:
+        axes.plot(data_dates, data_values)
+        smoothed_values = smooth(data_values, 25)
+        smoothed_dates = data_dates
+        axes.plot(smoothed_dates, smoothed_values, "--",
+                  linewidth=trend_line_width)
+    if title:
+        axes.set_title(title)
+
+    bins = np.linspace(data_dates[0], data_dates[-1], num=20)
+    indexes = np.digitize(data_dates, bins)
+
+    axes.set_xticks(data_dates)
+    months_seen = set()
+    xticklabels = []
+    oldidx = None
+    for x, idx in zip(data_dates, indexes):
+        x = dates.num2date(x).date()
+        if oldidx == idx:
+            xticklabels.append("")
+        elif x.strftime("%b") in months_seen:
+            xticklabels.append(x.strftime("%-d"))
+        else:
+            months_seen.add(x.strftime("%b"))
+            xticklabels.append(x.strftime("%-d\n%b"))
+        oldidx = idx
+    axes.set_xticklabels(xticklabels, rotation=0, fontsize=8, ha="center")
+
+    return axes
+
+
+reps_data, weight_data, measurement_data = extract_data()
+
+sane_sort_order = lambda m: "w" if m[1]['unit'] == "%" else m[1]["unit"] + m[0]
+sorted_measurement_data = sorted(measurement_data.items(), key=sane_sort_order)
+for blob in sorted_measurement_data:
+    typ, data = blob
+    title = typ + " (" + data['unit'] + ")"
+    plot_over_time(data, zero_based=False, type=LINES, title=title)
+
+
+for typ in reps_data:
+    plot_over_time(reps_data[typ], sum_over_time,
+                   title=typ + " (" + reps_data[typ]['unit'] + ")")
+    plot_over_time(weight_data[typ], mean_over_time, zero_based=False,
+                   title=typ + " (" + weight_data[typ]['unit'] + ")")
