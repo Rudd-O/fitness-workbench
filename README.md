@@ -31,3 +31,13 @@ Create your fitness tracker spreadsheet according to these instructions:
 Adjust the variables at the top of the workbench to point the workbench to your fitness tracker spreadsheet.
 
 Analyze to your heart's content.  Remember: this workbench is only a starting point.
+
+## How does it look?
+
+Take a look:
+
+[[doc/Body measurements 1.png|alt=Body measurements (1)]]
+
+[[doc/Body measurements 2.png|alt=Body measurements (2)]]
+
+[[doc/Weight lifting.png|alt=Weight lifting]]
