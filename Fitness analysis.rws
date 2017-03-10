@@ -123,8 +123,8 @@ def extract_data():
 
     odsmtime = os.stat(os.path.join(folder, filename)).st_mtime
     try:
-        csvmtime1 = os.stat(measurements_p)
-        csvmtime2 = os.stat(exercise_p)
+        csvmtime1 = os.stat(measurements_p).st_mtime
+        csvmtime2 = os.stat(exercise_p).st_mtime
     except Exception:
         csvmtime1 = 0
         csvmtime2 = 0
