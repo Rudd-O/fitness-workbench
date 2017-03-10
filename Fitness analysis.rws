@@ -10,8 +10,10 @@ import subprocess
 
 import numpy as np
 from scipy import signal as sig
+from scipy import stats
 from matplotlib import dates
 import matplotlib.pyplot as plt
+import matplotlib.colors
 
 from replot import Axes as OldAxes
 from replot import PlotWidget as OldPlotWidget
@@ -29,8 +31,9 @@ filename = "Fitness tracker.ods"
 
 # Sheet that contains measurements.
 # Sheet must be named as per this variable.
+# Refer to the README.md file for the format.
 # The sheet must have the following labels starting at A1:
-#   Date    Exercise name    Repetitions      Weight           Notes
+#   Date    Measurement      Value            Unit             Notes
 # Each line on the table must describe an exercise set.
 # Each cell on the table starting at A2 must be in the following format:
 #   date    string           integer          float/formula    string
@@ -38,8 +41,9 @@ measurements_f = "Measurements tracker"
 
 # Sheet that contains exercises.
 # Sheet must be named as per this variable.
+# Refer to the README.md file for the format.
 # The sheet must have the following labels starting at A1:
-#   Date    Measurement      Value            Unit             Notes
+#   Date    Exercise name    Repetitions      Weight           Notes
 # Each line on the table must describe a measurement (e.g. of your body).
 # Each cell on the table starting at A2 must be in the following format:
 #   date    string           float/formula    string           string
@@ -192,42 +196,33 @@ def extract_data():
     return [numpyize(x) for x in [reps_data, weight_data, measurements_data]]
 
 
-BARS = "bars"
-LINES = "lines"
-
 def smooth(x,window_len=11,polyorder=3):
     return sig.savgol_filter(x, window_len, polyorder)
 
 
-def plot_over_time(exercise_data,
-                   same_date_merge_func=None,
-                   bar_width=10,
-                   trend_line_width=2,
-                   width=9,
-                   height=3,
-                   zero_based=True,
-                   type=BARS,
-                   title=None):
-    if same_date_merge_func:
-        exercise_data = same_date_merge_func(exercise_data)
+def autosmooth(data):
+    polyorder = 3
+    fac = 2
+    win = len(data) / fac
+    if win % 2 == 0: win = win - 1
+    if win <= polyorder:
+        polyorder = win - 1
+    if win > 25:
+        win = 25
+    try:
+        return smooth(data, win, polyorder)
+    except Exception:
+        pass
 
-    data_dates = exercise_data['dates']
-    data_values = exercise_data['values']
-    if zero_based:
-        data_zeros = np.array([0.0 for x in exercise_data['values']])
-    else:
-        mindata = np.min(data_values)
-        data_zeros = np.array([mindata for x in exercise_data['values']])
 
+def preplot(values, width, height):
+    mindata = np.min(values)
+    data_zeros = np.array([mindata for x in values])
     axes = Axes(width=width, height=height, subplots_adjust_parms={'bottom': 0.11})
-    if type == BARS:
-        axes.vlines(data_dates, data_zeros, data_values, lw=bar_width)
-    else:
-        axes.plot(data_dates, data_values)
-        smoothed_values = smooth(data_values, 25)
-        smoothed_dates = data_dates
-        axes.plot(smoothed_dates, smoothed_values, "--",
-                  linewidth=trend_line_width)
+    return data_zeros, axes
+
+
+def postplot(axes, title, data_dates):
     if title:
         axes.set_title(title)
 
@@ -250,6 +245,57 @@ def plot_over_time(exercise_data,
         oldidx = idx
     axes.set_xticklabels(xticklabels, rotation=0, fontsize=8, ha="center")
 
+
+def plot_measurements(measurement_data,
+                      trend_line_width=2,
+                      width=9,
+                      height=3,
+                      zero_based=True,
+                      title=None):
+    data_zeros, axes = preplot(measurement_data['values'], width, height)
+    axes.plot(measurement_data['dates'], measurement_data['values'])
+    smoothed_values = autosmooth(measurement_data['values'])
+    smoothed_dates = measurement_data['dates']
+    axes.plot(smoothed_dates, smoothed_values, "--",
+              linewidth=trend_line_width)
+
+    postplot(axes, title, measurement_data['dates'])
+    return axes
+
+
+def plot_exercises(exercise_data,
+                   reps_data,
+                   bar_width=10,
+                   trend_line_width=2,
+                   width=9,
+                   height=3,
+                   zero_based=True,
+                   title=None):
+    exercise_data = mean_over_time(exercise_data)
+    reps_data = sum_over_time(reps_data)
+    mode = stats.mode(reps_data['values'])[0]
+
+    def getcolor(x):
+        if x >= mode:
+            return 'g'
+        hue = x / mode * 0.1
+        return matplotlib.colors.hsv_to_rgb([hue, 1, 1])
+
+    barcolors = [getcolor(x) for x in reps_data['values']]
+    data_zeros, axes = preplot(exercise_data['values'], width, height)
+    axes.vlines(exercise_data['dates'], data_zeros,
+                exercise_data['values'],
+                color=barcolors,
+                lw=bar_width)
+
+    smoothed_values = autosmooth(exercise_data['values'])
+    if smoothed_values is not None:
+        smoothed_dates = exercise_data['dates']
+        axes.plot(smoothed_dates, smoothed_values, "--",
+                  linewidth=trend_line_width)
+    axes.set_ylim([min(exercise_data['values']), max(exercise_data['values'])])
+
+    postplot(axes, title, exercise_data['dates'])
     return axes
 
 
@@ -260,11 +306,8 @@ sorted_measurement_data = sorted(measurement_data.items(), key=sane_sort_order)
 for blob in sorted_measurement_data:
     typ, data = blob
     title = typ + " (" + data['unit'] + ")"
-    plot_over_time(data, zero_based=False, type=LINES, title=title)
-
+    plot_measurements(data, title=title)
 
 for typ in reps_data:
-    plot_over_time(reps_data[typ], sum_over_time,
-                   title=typ + " (" + reps_data[typ]['unit'] + ")")
-    plot_over_time(weight_data[typ], mean_over_time, zero_based=False,
+    plot_exercises(weight_data[typ], reps_data[typ],
                    title=typ + " (" + weight_data[typ]['unit'] + ")")
