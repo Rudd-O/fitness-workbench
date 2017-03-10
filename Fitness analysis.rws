@@ -251,6 +251,8 @@ def postplot(axes, title, data_dates, data_values, trend_line_width):
         oldidx = idx
     axes.set_xticklabels(xticklabels, rotation=0, fontsize=8, ha="center")
 
+    return smoothed_values
+
 
 def plot_measurements(measurement_data,
                       trend_line_width=2,
@@ -261,8 +263,9 @@ def plot_measurements(measurement_data,
     data_zeros, axes = preplot(measurement_data['values'], width, height)
     axes.plot(measurement_data['dates'], measurement_data['values'])
 
-    postplot(axes, title, measurement_data['dates'],
-             measurement_data['values'], trend_line_width)
+    smoothed_values = postplot(axes, title, measurement_data['dates'],
+                      measurement_data['values'], trend_line_width)
+
     return axes
 
 
@@ -276,12 +279,12 @@ def plot_exercises(exercise_data,
                    title=None):
     exercise_data = mean_over_time(exercise_data)
     reps_data = sum_over_time(reps_data)
-    mode = stats.mode(reps_data['values'])[0]
-
+    reps_mode = stats.mode(reps_data['values'])[0]
+    
     def getcolor(x):
-        if x >= mode:
+        if x >= reps_mode:
             return 'g'
-        hue = x / mode * 0.1
+        hue = x / reps_mode * 0.1
         return matplotlib.colors.hsv_to_rgb([hue, 1, 1])
 
     barcolors = [getcolor(x) for x in reps_data['values']]
@@ -290,10 +293,17 @@ def plot_exercises(exercise_data,
                 exercise_data['values'],
                 color=barcolors,
                 lw=bar_width)
-    axes.set_ylim([min(exercise_data['values']), max(exercise_data['values'])])
+    
+    smoothed_values = postplot(axes, title, exercise_data['dates'],
+                      exercise_data['values'], trend_line_width)
 
-    postplot(axes, title, exercise_data['dates'],
-             exercise_data['values'], trend_line_width)
+    miny = min(exercise_data['values'])
+    maxy = max(exercise_data['values'])
+    if smoothed_values is not None:
+        maxy = max([maxy, max(smoothed_values)])
+    maxy = maxy * 1.02
+    axes.set_ylim([miny, maxy])
+
     return axes
 
 
