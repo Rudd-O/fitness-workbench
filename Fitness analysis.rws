@@ -222,7 +222,13 @@ def preplot(values, width, height):
     return data_zeros, axes
 
 
-def postplot(axes, title, data_dates):
+def postplot(axes, title, data_dates, data_values, trend_line_width):
+    smoothed_values = autosmooth(data_values)
+    if smoothed_values is not None:
+        smoothed_dates = data_dates
+        axes.plot(smoothed_dates, smoothed_values, "--",
+                  linewidth=trend_line_width)
+
     if title:
         axes.set_title(title)
 
@@ -254,12 +260,9 @@ def plot_measurements(measurement_data,
                       title=None):
     data_zeros, axes = preplot(measurement_data['values'], width, height)
     axes.plot(measurement_data['dates'], measurement_data['values'])
-    smoothed_values = autosmooth(measurement_data['values'])
-    smoothed_dates = measurement_data['dates']
-    axes.plot(smoothed_dates, smoothed_values, "--",
-              linewidth=trend_line_width)
 
-    postplot(axes, title, measurement_data['dates'])
+    postplot(axes, title, measurement_data['dates'],
+             measurement_data['values'], trend_line_width)
     return axes
 
 
@@ -287,15 +290,10 @@ def plot_exercises(exercise_data,
                 exercise_data['values'],
                 color=barcolors,
                 lw=bar_width)
-
-    smoothed_values = autosmooth(exercise_data['values'])
-    if smoothed_values is not None:
-        smoothed_dates = exercise_data['dates']
-        axes.plot(smoothed_dates, smoothed_values, "--",
-                  linewidth=trend_line_width)
     axes.set_ylim([min(exercise_data['values']), max(exercise_data['values'])])
 
-    postplot(axes, title, exercise_data['dates'])
+    postplot(axes, title, exercise_data['dates'],
+             exercise_data['values'], trend_line_width)
     return axes
 
 
