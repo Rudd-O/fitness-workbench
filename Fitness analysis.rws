@@ -196,43 +196,69 @@ def extract_data():
     return [numpyize(x) for x in [reps_data, weight_data, measurements_data]]
 
 
-def smooth(x,window_len=11,polyorder=3):
-    return sig.savgol_filter(x, window_len, polyorder)
-
-
-def autosmooth(data):
-    polyorder = 3
-    fac = 2
-    win = len(data) / fac
-    if win % 2 == 0: win = win - 1
-    if win <= polyorder:
-        polyorder = win - 1
-    if win > 25:
-        win = 25
+def autosmooth(data_values, maxwin, polyorder):
+    fac = 3
+    win = len(data_values) / fac
+    if win % 2 == 0:
+        win = win + 1
+    if win < 5:
+        win = 5
+    if win > maxwin:
+        win = maxwin
     try:
-        return smooth(data, win, polyorder)
+        return sig.savgol_filter(data_values, win, polyorder)
     except Exception:
-        pass
+        print "sig savgol filter failed with len",
+        print len(data_values), "window", win, "polyorder", polyorder
 
 
 def preplot(values, width, height):
     mindata = np.min(values)
     data_zeros = np.array([mindata for x in values])
-    axes = Axes(width=width, height=height, subplots_adjust_parms={'bottom': 0.11})
+    axes = Axes(width=width, height=height,
+                subplots_adjust_parms={'bottom': 0.11,
+                                       'left': 0.06,
+                                       'right': 1.0})
     return data_zeros, axes
 
 
-def postplot(axes, title, data_dates, data_values, trend_line_width):
-    smoothed_values = autosmooth(data_values)
+def postplot(axes, title, data_dates, data_values, trend_line_width, date_limits, maxwin):
+    interp_dates = np.linspace(data_dates[0], data_dates[-1], data_dates[-1] - data_dates[0] + 1)
+    interp_values = np.interp(interp_dates, data_dates, data_values)
+
+    forecast_length = 14
+    forecast_window = 15
+    smooth_order = 2
+
+    date_limits = (date_limits[0], date_limits[-1] + forecast_length)
+
+    trend_values = None
+    smoothed_values = autosmooth(interp_values, maxwin, smooth_order)
     if smoothed_values is not None:
-        smoothed_dates = data_dates
-        axes.plot(smoothed_dates, smoothed_values, "--",
-                  linewidth=trend_line_width)
+        axes.plot(interp_dates, smoothed_values, "--",
+                  linewidth=trend_line_width, color='g')
+
+        for d, v, o in [(data_dates, data_values, 1)]:
+            factors = np.polyfit(d[-forecast_window:],
+                                 v[-forecast_window:],
+                                 o)
+            trend = np.poly1d(factors)
+            trend_dates = np.linspace(data_dates[-1],
+                                      date_limits[-1],
+                                      data_dates[-1] - date_limits[0] + 1)
+            trend_values = [trend(t) for t in trend_dates]
+            diff = smoothed_values[-1] - trend_values[0]
+            trend_values = trend_values + diff
+            axes.plot(trend_dates,
+                      trend_values,
+                      ":", linewidth=trend_line_width, color='g')
 
     if title:
         axes.set_title(title)
 
-    bins = np.linspace(data_dates[0], data_dates[-1], num=20)
+    mindate = date_limits[0]
+    maxdate = date_limits[-1]
+    bins = np.linspace(mindate, maxdate, num=20)
     indexes = np.digitize(data_dates, bins)
 
     axes.set_xticks(data_dates)
@@ -251,20 +277,39 @@ def postplot(axes, title, data_dates, data_values, trend_line_width):
         oldidx = idx
     axes.set_xticklabels(xticklabels, rotation=0, fontsize=8, ha="center")
 
-    return smoothed_values
+    axes.set_xlim(*date_limits)
+
+    miny = min(data_values)
+    maxy = max(data_values)
+    if smoothed_values is not None:
+        miny = min([miny, min(smoothed_values), min(trend_values)])
+        maxy = max([maxy, max(smoothed_values), max(trend_values)])
+
+    if maxy - miny < 1.0:
+        mean = (maxy - miny) / 2.0
+        miny = miny - mean
+        maxy = maxy + mean
+
+    maxy = maxy * 1.02
+    axes.set_ylim([miny, maxy])
 
 
 def plot_measurements(measurement_data,
                       trend_line_width=2,
                       width=9,
                       height=3,
-                      zero_based=True,
-                      title=None):
+                      title=None,
+                      date_limits=None,
+                      maxwin=13):
+    if date_limits is None:
+        date_limits = (measurement_data['dates'][0], measurement_data['dates'][-1])
+
     data_zeros, axes = preplot(measurement_data['values'], width, height)
     axes.plot(measurement_data['dates'], measurement_data['values'])
 
-    smoothed_values = postplot(axes, title, measurement_data['dates'],
-                      measurement_data['values'], trend_line_width)
+    postplot(axes, title, measurement_data['dates'],
+             measurement_data['values'], trend_line_width,
+             date_limits, maxwin)
 
     return axes
 
@@ -275,12 +320,18 @@ def plot_exercises(exercise_data,
                    trend_line_width=2,
                    width=9,
                    height=3,
-                   zero_based=True,
-                   title=None):
+                   title=None,
+                   date_limits=None,
+                   maxwin=13):
+    if date_limits:
+        date_limits = (date_limits[0] - 1, date_limits[-1] + 1)
+    else:
+        date_limits = (exercise_data['dates'][0] - 1, exercise_data['dates'][-1] + 1)
+
     exercise_data = mean_over_time(exercise_data)
     reps_data = sum_over_time(reps_data)
     reps_mode = stats.mode(reps_data['values'])[0]
-    
+
     def getcolor(x):
         if x >= reps_mode:
             return 'g'
@@ -288,34 +339,41 @@ def plot_exercises(exercise_data,
         return matplotlib.colors.hsv_to_rgb([hue, 1, 1])
 
     barcolors = [getcolor(x) for x in reps_data['values']]
-    data_zeros, axes = preplot(exercise_data['values'], width, height)
-    axes.vlines(exercise_data['dates'], data_zeros,
+    _, axes = preplot(exercise_data['values'], width, height)
+    axes.vlines(exercise_data['dates'],
+                [0.0 for _ in exercise_data['values']],
                 exercise_data['values'],
                 color=barcolors,
                 lw=bar_width)
-    
-    smoothed_values = postplot(axes, title, exercise_data['dates'],
-                      exercise_data['values'], trend_line_width)
 
-    miny = min(exercise_data['values'])
-    maxy = max(exercise_data['values'])
-    if smoothed_values is not None:
-        maxy = max([maxy, max(smoothed_values)])
-    maxy = maxy * 1.02
-    axes.set_ylim([miny, maxy])
-
+    postplot(axes, title, exercise_data['dates'],
+             exercise_data['values'], trend_line_width,
+             date_limits, maxwin)
     return axes
 
 
+def daterange(data):
+    dates = set()
+    for k, v in data.items():
+        for date in v['dates']:
+            dates.add(date)
+    return min(dates), max(dates)
+
+
 reps_data, weight_data, measurement_data = extract_data()
+date_limits = daterange(measurement_data)
+#date_limits = [dates.datestr2num('2017-02-01'), date_limits[1]]
+
 
 sane_sort_order = lambda m: "w" if m[1]['unit'] == "%" else m[1]["unit"] + m[0]
 sorted_measurement_data = sorted(measurement_data.items(), key=sane_sort_order)
 for blob in sorted_measurement_data:
     typ, data = blob
-    title = typ + " (" + data['unit'] + ")"
-    plot_measurements(data, title=title)
+    plot_measurements(data, title=typ + " (" + data['unit'] + ")",
+                      date_limits=date_limits)
+
 
 for typ in reps_data:
     plot_exercises(weight_data[typ], reps_data[typ],
-                   title=typ + " (" + weight_data[typ]['unit'] + ")")
+                   title=typ + " (" + weight_data[typ]['unit'] + ")",
+                   date_limits=date_limits)
