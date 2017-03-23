@@ -12,11 +12,15 @@ import subprocess
 import numpy as np
 from scipy import signal as sig
 from scipy import stats
+import matplotlib
 from matplotlib import dates
 import matplotlib.pyplot as plt
 import matplotlib.colors
 
+from reinteract.recorded_object import RecordedObject, default_filter
+
 from replot import Axes as OldAxes
+from replot import _validate_args
 from replot import PlotWidget as OldPlotWidget
 from replot import custom_result, Figure, _PlotResultCanvas
 import gtk.gdk
@@ -50,9 +54,6 @@ measurements_f = "Measurements tracker"
 #   date    string           float/formula    string           string
 exercise_f = "Exercise tracker"
 
-# Appearance controls
-chart_width=14
-
 
 class PlotWidget(OldPlotWidget):
 
@@ -76,13 +77,19 @@ class PlotWidget(OldPlotWidget):
         self.cached_contents = None
 
 
-class Axes(OldAxes):
+class Axes(RecordedObject, custom_result.CustomResult):
 
-    def __init__(self, width=None, height=None, subplots_adjust_parms=None):
-        apply(OldAxes.__init__, (self,))
+    __legend = None
+
+    def __init__(self, display='inline', width=None, height=None, subplots_adjust_parms=None):
+        apply(RecordedObject.__init__, (self,))
+        self.display = display
         self.figure_width = width
         self.figure_height = height
         self.subplots_adjust_parms = subplots_adjust_parms
+
+    def _check_plot(self, name, args, kwargs, spec):
+        return apply(_validate_args, (args,))
 
     def create_widget(self):
         widget = PlotWidget(self, self.figure_width, self.figure_height)
@@ -90,7 +97,40 @@ class Axes(OldAxes):
         if self.subplots_adjust_parms:
             self.figure.subplots_adjust(**self.subplots_adjust_parms)
         self._replay(widget.axes)
+        if self.__legend is not None:
+            kwargs = self.__legend[1]
+            vals = {}
+            for prop in ["edgecolor", "facecolor"]:
+                if prop in kwargs:
+                    vals[prop] = kwargs[prop]
+                    del kwargs[prop]
+            widget.axes.legend(*self.__legend[0],
+                               **kwargs)
+            if vals:
+                obj = widget.axes.get_legend().get_frame()
+                for prop, val in vals.items():
+                    attr = getattr(obj, "set_%s" % prop)
+                    attr(val)
         return widget
+
+    def print_result(self, *args, **kwargs):
+        return apply(OldAxes.print_result, [self] + list(args), kwargs)
+
+    def format_legend(self, *args, **kwargs):
+        self.__legend = (args, kwargs)
+
+
+def filter_method(baseclass, name):
+    if not default_filter(baseclass, name):
+        return False
+    if name.startswith('get_') and name != "get_legend":
+        return False
+    if name == 'create_widget':
+        return False
+    return True
+
+
+Axes._set_target_class(matplotlib.axes.Axes, filter_method)
 
 
 def merge_over_time(datapoints, func):
@@ -174,9 +214,9 @@ def extract_data():
         reader = csv.reader(f, delimiter=",")
         for date, measurement, value, unit, _ in reader:
             if date == "Date": continue
-            if value == "": continue
             if measurement not in measurements_data:
                 measurements_data[measurement] = []
+            if value == "": continue
             measurements_data[measurement].append([
                 date,
                 float(value),
@@ -184,7 +224,7 @@ def extract_data():
             ])
 
     def numpyize(stuff):
-        res = {}
+        res = collections.OrderedDict()
         for k, v in stuff.items():
             data = np.array([np.array(xi) for xi in v])
             data = data.transpose()
@@ -221,80 +261,149 @@ def preplot(values, width, height):
     data_zeros = np.array([mindata for x in values])
     axes = Axes(width=width, height=height,
                 subplots_adjust_parms={'bottom': 0.11,
-                                       'left': 0.06,
-                                       'right': 1.0})
+                                       'left': 0.05,
+                                       'right': 0.99})
     return data_zeros, axes
 
 
-def postplot(axes, title, data_dates, data_values, trend_line_width, date_limits, smoothing_window_len, forecast_past_sample_count):
+def postplot(axes, title,
+             data_dates, data_values,
+             trend_line_width, trend_line_color,
+             date_limits, smoothing_window_len,
+             forecast_past_sample_count, forecast_days):
     interp_dates = np.linspace(data_dates[0], data_dates[-1], data_dates[-1] - data_dates[0] + 1)
     interp_values = np.interp(interp_dates, data_dates, data_values)
 
-    forecast_length = 14
     smooth_order = 2
-
-    date_limits = (date_limits[0], date_limits[-1] + forecast_length)
+    date_limits = (date_limits[0], date_limits[-1] + forecast_days)
 
     trend_values = None
     smoothed_values = autosmooth(interp_values, smoothing_window_len, smooth_order)
     if smoothed_values is not None:
         axes.plot(interp_dates, smoothed_values, "--",
-                  linewidth=trend_line_width, color='g')
+                  linewidth=trend_line_width,
+                  color=trend_line_color,
+                  label="Average (over %s days)" % smoothing_window_len)
 
         for d, v, o in [(data_dates, data_values, 1)]:
+            # Compute the general trend based on all data points.
+            factors = np.polyfit(d, v, o)
+            trend = np.poly1d(factors)
+            trend_dates = [data_dates[0], date_limits[-1]]
+            trend_values = [trend(t) for t in trend_dates]
+            axes.plot(trend_dates,
+                      trend_values,
+                      ":",
+                      linewidth=trend_line_width,
+                      color=trend_line_color,
+                      label="General trend")
+
+            # Compute the forecast based on the last forecast_past_sample_count.
             factors = np.polyfit(d[-forecast_past_sample_count:],
                                  v[-forecast_past_sample_count:],
                                  o)
-            trend = np.poly1d(factors)
-            trend_dates = np.linspace(data_dates[-1],
-                                      date_limits[-1],
-                                      data_dates[-1] - date_limits[0] + 1)
-            trend_values = [trend(t) for t in trend_dates]
-            diff = smoothed_values[-1] - trend_values[0]
-            trend_values = trend_values + diff
-            axes.plot(trend_dates,
-                      trend_values,
-                      ":", linewidth=trend_line_width, color='g')
+            forecast = np.poly1d(factors)
+            forecast_dates = np.linspace(data_dates[-1],
+                                         date_limits[-1],
+                                         data_dates[-1] - date_limits[0] + 1)
+            forecast_values = [forecast(t) for t in forecast_dates]
+            diff = smoothed_values[-1] - forecast_values[0]
+            forecast_values = forecast_values + diff
+            axes.plot(forecast_dates,
+                      forecast_values,
+                      "--",
+                      linewidth=trend_line_width,
+                      color=trend_line_color,
+                      label="Forecast (from last %s samples)" % forecast_past_sample_count)
 
     if title:
         axes.set_title(title)
 
     mindate = date_limits[0]
     maxdate = date_limits[-1]
-    bins = np.linspace(mindate, maxdate, num=20)
-    indexes = np.digitize(data_dates, bins)
+    diff = maxdate - mindate
+    space_fac = 40
+    space = float(diff) / float(space_fac) / 2
 
-    axes.set_xticks(data_dates)
-    months_seen = set()
-    xticklabels = []
-    oldidx = None
-    for x, idx in zip(data_dates, indexes):
-        x = dates.num2date(x).date()
-        if oldidx == idx:
-            xticklabels.append("")
-        elif x.strftime("%b") in months_seen:
-            xticklabels.append(x.strftime("%-d"))
-        else:
-            months_seen.add(x.strftime("%b"))
-            xticklabels.append(x.strftime("%-d\n%b"))
-        oldidx = idx
-    axes.set_xticklabels(xticklabels, rotation=0, fontsize=8, ha="center")
+    minor_tick_dates = data_dates
+    minor_tick_dates = list(sorted(set(minor_tick_dates) | set([mindate, maxdate])))
+    minor_tick_dates = [x for x
+                        in minor_tick_dates
+                        if x >= mindate and x <= maxdate]
+    major_tick_dates = [x for x
+                        in np.linspace(mindate, maxdate, diff + 1)
+                        if dates.num2date(x).day == 1]
+    major_tick_dates = list(sorted(set(major_tick_dates) | set([mindate, maxdate])))
+    all_dates = list(sorted(set(minor_tick_dates) | set(major_tick_dates)))
+
+    xticklabels = ["" for _ in all_dates]
+    xtickmask = [False for _ in all_dates]
+    for i, d in enumerate(all_dates):
+        if d in major_tick_dates:
+            x = dates.num2date(d).date()
+            xtickmask[i] = True
+            if x.day == 1 or i == 0:
+                xticklabels[i] = x.strftime("%-d\n%b")
+            else:
+                xticklabels[i] = x.strftime("%-d")
+            lastset = i
+
+    for i in reversed(range(len(all_dates))):
+        x = dates.num2date(all_dates[i]).date()
+        s = space
+        if x.day >= 10:
+            s = s * 2
+        if xticklabels[i]: continue
+        if i + 1 < len(all_dates):
+            for j in range(i+1, len(all_dates)):
+                if xticklabels[j]: break
+            neighbor_date = dates.num2date(all_dates[j]).date()
+            if neighbor_date.day >= 10 and s == space:
+                s = s * 2
+            distance = abs((neighbor_date - x).days)
+            if distance < s: continue
+        if i > 0:
+            for j in range(i-1, -1, -1):
+                if xticklabels[j]:
+                    break
+            neighbor_date = dates.num2date(all_dates[j]).date()
+            if neighbor_date.day >= 10 and s == space:
+                s = s * 2
+            distance = abs((neighbor_date - x).days)
+            if distance < s: continue
+        xticklabels[i] = x.strftime("%-d")
+
+    major_tick_dates = [x for i, x in enumerate(all_dates) if xtickmask[i]]
+    minor_tick_dates = [x for i, x in enumerate(all_dates) if not xtickmask[i]]
+    major_xticklabels = [x for i, x in enumerate(xticklabels) if xtickmask[i]]
+    minor_xticklabels = [x for i, x in enumerate(xticklabels) if not xtickmask[i]]
 
     axes.set_xlim(*date_limits)
+    axes.set_xticks(major_tick_dates, minor=False)
+    axes.set_xticks(minor_tick_dates, minor=True)
+    axes.set_xticklabels(major_xticklabels, minor=False, rotation=0, fontsize=8, ha="center")
+    axes.set_xticklabels(minor_xticklabels, minor=True, rotation=0, fontsize=8, ha="center")
 
     miny = min(data_values)
     maxy = max(data_values)
     if smoothed_values is not None:
-        miny = min([miny, min(smoothed_values), min(trend_values)])
-        maxy = max([maxy, max(smoothed_values), max(trend_values)])
+        miny = min([miny, min(smoothed_values), min(trend_values), min(forecast_values)])
+        maxy = max([maxy, max(smoothed_values), max(trend_values), max(forecast_values)])
 
     if maxy - miny < 1.0:
         mean = (maxy - miny) / 2.0
         miny = miny - mean
         maxy = maxy + mean
 
-    maxy = maxy * 1.02
+    maxy = maxy * 1.04
     axes.set_ylim([miny, maxy])
+
+    axes.grid(True, color='#999999', axis="y")
+    axes.format_legend(fontsize=10, loc='upper center',
+                       frameon=True, ncol=5,
+                       bbox_to_anchor=(0.5, 1.02),
+                       edgecolor=(0,0,0,0),
+                       facecolor=(0,0,0,0))
 
 
 def daterange(data):
@@ -307,20 +416,24 @@ def daterange(data):
 
 def plot_measurements(measurement_data,
                       date_limits,
-                      trend_line_width=2,
-                      width=chart_width,
+                      trend_line_width=1,
+                      trend_line_color="darkslategray",
+                      width=12,
                       height=3,
                       title=None,
-                      smoothing_window_len=13):
+                      smoothing_window_len=13,
+                      forecast_days=14):
     date_limits = (date_limits[0], date_limits[-1])
 
     data_zeros, axes = preplot(measurement_data['values'], width, height)
-    axes.plot(measurement_data['dates'], measurement_data['values'])
+    axes.plot(measurement_data['dates'], measurement_data['values'],
+              label="Sample data")
 
     postplot(axes, title, measurement_data['dates'],
              measurement_data['values'], trend_line_width,
-             date_limits, smoothing_window_len,
-             forecast_past_sample_count=14)
+             trend_line_color, date_limits, smoothing_window_len,
+             forecast_past_sample_count=14,
+             forecast_days=forecast_days)
 
     return axes
 
@@ -329,12 +442,14 @@ def plot_exercises(exercise_data,
                    reps_data,
                    date_limits,
                    bar_width=10,
-                   trend_line_width=2,
-                   width=chart_width,
+                   trend_line_width=1,
+                   trend_line_color="darkslategray",
+                   width=12,
                    height=3,
                    title=None,
-                   smoothing_window_len=13):
-    date_limits = (date_limits[0] - 1, date_limits[-1] + 1)
+                   smoothing_window_len=13,
+                   forecast_days=14):
+    date_limits = (date_limits[0], date_limits[-1])
 
     exercise_data = mean_over_time(exercise_data)
     reps_data = sum_over_time(reps_data)
@@ -352,29 +467,52 @@ def plot_exercises(exercise_data,
                 [0.0 for _ in exercise_data['values']],
                 exercise_data['values'],
                 color=barcolors,
-                lw=bar_width)
+                lw=bar_width,
+                label="Sample data")
 
     postplot(axes, title, exercise_data['dates'],
              exercise_data['values'], trend_line_width,
-             date_limits, smoothing_window_len,
-             forecast_past_sample_count=3)
+             trend_line_color, date_limits, smoothing_window_len,
+             forecast_past_sample_count=3,
+             forecast_days=forecast_days)
     return axes
 
 
 reps_data, weight_data, measurement_data = extract_data()
 date_limits = daterange(measurement_data)
+forecast_days = 14
+chart_width = 9
 # date_limits = [dates.datestr2num('2017-02-27'), date_limits[1]]
 
 
-sane_sort_order = lambda m: "w" if m[1]['unit'] == "%" else m[1]["unit"] + m[0]
-sorted_measurement_data = sorted(measurement_data.items(), key=sane_sort_order)
+def sortorder(m):
+    if m[1]['unit'] == "%": return 0
+    if m[1]['unit'] == "lb": return 1
+    if "waist" in m[0].lower(): return 2
+    return 3 + measurement_data.keys().index(m[0])
+sorted_measurement_data = list(sorted(measurement_data.items(), key=sortorder))
 for typ, data in sorted_measurement_data:
+    if sortorder((typ, data)) > 3: continue
     plot_measurements(data, date_limits,
-                      title=typ + " (" + data['unit'] + ")")
+                      title=typ + " (" + data['unit'] + ")",
+                      forecast_days=forecast_days,
+                      width=chart_width)
 
 
-sane_sort_order = lambda m: -m[1]['dates'][-1]
-sorted_measurement_data = sorted(reps_data.items(), key=sane_sort_order)
+
+sorted_measurement_data = list(sorted(measurement_data.items(), key=sortorder))
+for typ, data in sorted_measurement_data:
+    if sortorder((typ, data)) <= 3: continue
+    plot_measurements(data, date_limits,
+                      title=typ + " (" + data['unit'] + ")",
+                      forecast_days=forecast_days,
+                      width=chart_width)
+
+
+sortorder = lambda m: -m[1]['dates'][-1]
+sorted_measurement_data = list(sorted(reps_data.items(), key=sortorder))
 for typ, _ in sorted_measurement_data:
     plot_exercises(weight_data[typ], reps_data[typ], date_limits,
-                   title=typ + " (" + weight_data[typ]['unit'] + ")")
+                   title=typ + " (" + weight_data[typ]['unit'] + ")",
+                   forecast_days=forecast_days,
+                   width=chart_width)
