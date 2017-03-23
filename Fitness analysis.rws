@@ -2,6 +2,7 @@
 
 # vim: tabstop=8 expandtab shiftwidth=4 softtabstop=4
 
+import collections
 import csv
 import datetime
 import itertools
@@ -48,6 +49,9 @@ measurements_f = "Measurements tracker"
 # Each cell on the table starting at A2 must be in the following format:
 #   date    string           float/formula    string           string
 exercise_f = "Exercise tracker"
+
+# Appearance controls
+chart_width=14
 
 
 class PlotWidget(OldPlotWidget):
@@ -142,8 +146,8 @@ def extract_data():
             exercise_p
         ],))
 
-    reps_data = {}
-    weight_data = {}
+    reps_data = collections.OrderedDict()
+    weight_data = collections.OrderedDict()
 
     with open(exercise_p) as f:
         reader = csv.reader(f, delimiter=",")
@@ -164,7 +168,7 @@ def extract_data():
                 "lb"
             ])
 
-    measurements_data = {}
+    measurements_data = collections.OrderedDict()
 
     with open(measurements_p) as f:
         reader = csv.reader(f, delimiter=",")
@@ -304,7 +308,7 @@ def daterange(data):
 def plot_measurements(measurement_data,
                       date_limits,
                       trend_line_width=2,
-                      width=9,
+                      width=chart_width,
                       height=3,
                       title=None,
                       smoothing_window_len=13):
@@ -326,7 +330,7 @@ def plot_exercises(exercise_data,
                    date_limits,
                    bar_width=10,
                    trend_line_width=2,
-                   width=9,
+                   width=chart_width,
                    height=3,
                    title=None,
                    smoothing_window_len=13):
@@ -364,12 +368,13 @@ date_limits = daterange(measurement_data)
 
 sane_sort_order = lambda m: "w" if m[1]['unit'] == "%" else m[1]["unit"] + m[0]
 sorted_measurement_data = sorted(measurement_data.items(), key=sane_sort_order)
-for blob in sorted_measurement_data:
-    typ, data = blob
+for typ, data in sorted_measurement_data:
     plot_measurements(data, date_limits,
                       title=typ + " (" + data['unit'] + ")")
 
 
-for typ in reps_data:
+sane_sort_order = lambda m: -m[1]['dates'][-1]
+sorted_measurement_data = sorted(reps_data.items(), key=sane_sort_order)
+for typ, _ in sorted_measurement_data:
     plot_exercises(weight_data[typ], reps_data[typ], date_limits,
                    title=typ + " (" + weight_data[typ]['unit'] + ")")
