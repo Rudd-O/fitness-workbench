@@ -34,10 +34,10 @@ Analyze to your heart's content.  Remember: this workbench is only a starting po
 
 ## How does it look?
 
-Take a look:
+Take a look (note that the data behind the graphs are fictitious):
 
-![Body measurements (1)](doc/Body measurements 1.png)
+![Body measurements (1)](doc/Body%20measurements%201.png)
 
-![Body measurements (2)](doc/Body measurements 2.png)
+![Body measurements (2)](doc/Body%20measurements%202.png)
 
-![Weight lifting](doc/Weight lifting.png)
+![Weight lifting](doc/Weight%20lifting.png)
