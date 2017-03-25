@@ -438,21 +438,21 @@ def plot_measurements(measurement_data,
     return axes
 
 
-def plot_exercises(exercise_data,
+def plot_exercises(weight_data,
                    reps_data,
                    date_limits,
-                   bar_width=10,
                    trend_line_width=1,
                    trend_line_color="darkslategray",
                    width=12,
                    height=3,
+                   spill_factor = 1.0,
                    title=None,
                    smoothing_window_len=13,
                    forecast_days=14):
     date_limits = (date_limits[0], date_limits[-1])
 
-    exercise_data = mean_over_time(exercise_data)
-    reps_data = sum_over_time(reps_data)
+    _, axes = preplot(weight_data['values'], width, height)
+
     reps_mode = stats.mode(reps_data['values'])[0]
 
     def getcolor(x):
@@ -461,22 +461,44 @@ def plot_exercises(exercise_data,
         hue = x / reps_mode * 0.1
         return matplotlib.colors.hsv_to_rgb([hue, 1, 1])
 
-    barcolors = [getcolor(x) for x in reps_data['values']]
-    _, axes = preplot(exercise_data['values'], width, height)
-    axes.vlines(exercise_data['dates'],
-                [0.0 for _ in exercise_data['values']],
-                exercise_data['values'],
-                color=barcolors,
-                lw=bar_width,
-                label="Sample data")
+    thedates = []
+    theweights = []
+    thecolors = []
+    thewidths = []
+    reps_in_one_day = 0
+    for date, g in itertools.groupby(zip(weight_data['dates'],
+                                     weight_data['values'],
+                                     reps_data['values']), lambda m: m[0]):
+        g = list(g)
+        reps_in_one_day = max([reps_in_one_day, len(g)])
+        if reps_in_one_day > 1:
+            thedates.extend(np.linspace(date - (0.5 * spill_factor),
+                                        date + (0.5 * spill_factor),
+                                        reps_in_one_day + 1)[:-1])
+        else:
+            thedates.append(date - (0.5*spill_factor))
+        while len(g) < reps_in_one_day:
+            g.append([0.0, 0.0, 0.0])
+        theweights.extend([x[1] for x in g])
+        thecolors.extend([getcolor(x[2]) for x in g])
+        thewidths.extend([1.0 / reps_in_one_day * spill_factor for _ in enumerate(g)])
 
-    postplot(axes, title, exercise_data['dates'],
-             exercise_data['values'], trend_line_width,
+    axes.bar(thedates,
+             theweights,
+             thewidths,
+             color=thecolors,
+             label="Sample data",
+             linewidth=0)
+
+    weight_data = mean_over_time(weight_data)
+
+    postplot(axes, title, weight_data['dates'],
+             weight_data['values'], trend_line_width,
              trend_line_color, date_limits, smoothing_window_len,
              forecast_past_sample_count=3,
              forecast_days=forecast_days)
-    return axes
 
+    return axes
 
 reps_data, weight_data, measurement_data = extract_data()
 date_limits = daterange(measurement_data)
@@ -515,4 +537,5 @@ for typ, _ in sorted_measurement_data:
     plot_exercises(weight_data[typ], reps_data[typ], date_limits,
                    title=typ + " (" + weight_data[typ]['unit'] + ")",
                    forecast_days=forecast_days,
-                   width=chart_width)
+                   width=chart_width,
+                   spill_factor=1.5)
