@@ -304,22 +304,6 @@ def extract_data():
     return exercise_data, measurement_data
 
 
-def autosmooth(data_values, smoothing_window_len, polyorder):
-    fac = 3
-    win = len(data_values) / fac
-    if win % 2 == 0:
-        win = win + 1
-    if win < 5:
-        win = 5
-    if win > smoothing_window_len:
-        win = smoothing_window_len
-    try:
-        return sig.savgol_filter(data_values, win, polyorder)
-    except Exception:
-        print "sig savgol filter failed with len",
-        print len(data_values), "window", win, "polyorder", polyorder
-
-
 def getaxes(width, height):
     return Axes(width=width, height=height,
                 subplots_adjust_parms={'bottom': 0.11,
@@ -578,40 +562,35 @@ class WorkoutPlotter(ActivityPlotter):
         return axes
 
 
-def autosmooth_with_interpolation(forecast_dates, forecast_values, smoothing_window_len, smooth_order):
-    interp_dates = np.linspace(forecast_dates[0], forecast_dates[-1], forecast_dates[-1] - forecast_dates[0] + 1)
-    interp_values = np.interp(interp_dates, forecast_dates, forecast_values)
-    return interp_dates, autosmooth(interp_values, smoothing_window_len, smooth_order)
+def noise_smoothing(win):
+    def smoothing(forecast_dates, forecast_values):
+        order = 3
+        fac = 4
+        # Make an index for each input date (all irregularly-spaced).
+        forecast_dates_indices = np.indices((len(forecast_dates),))[0]
+        # Generate a higher-resolution date band from the input date range.
+        higher_res_dates = np.linspace(forecast_dates[0],
+                                    forecast_dates[-1],
+                                    fac*(forecast_dates[-1] - forecast_dates[0]) + 1)
+        # Interpolate the indices (each corresponding to a date) to a
+        # specific higher-resolution date band.
+        interp_xs_indices = intp.griddata(forecast_dates,
+                                        forecast_dates_indices,
+                                        higher_res_dates,
+                                        method='linear')
+        # Make a B-spline representation of the input data, then
+        # evaluate the function used the interpolated indices
+        tck = intp.splrep(forecast_dates_indices, forecast_values, k=order)
+        curve_ys = intp.splev(interp_xs_indices, tck)
+        try:
+            curve_ys = sig.savgol_filter(curve_ys, (win * fac)+1, order)
+        except Exception:
+            print "sig savgol filter failed with len",
+            print len(curve_ys), "window", win, "polyorder", order
 
-
-def exercise_smoothing(forecast_dates, forecast_values):
-    win = 15
-    order = 3
-    fac = 4
-    # Make an index for each input date (all irregularly-spaced).
-    forecast_dates_indices = np.indices((len(forecast_dates),))[0]
-    # Generate a higher-resolution date band from the input date range.
-    higher_res_dates = np.linspace(forecast_dates[0],
-                                   forecast_dates[-1],
-                                   fac*(forecast_dates[-1] - forecast_dates[0]) + 1)
-    # Interpolate the indices (each corresponding to a date) to a
-    # specific higher-resolution date band.
-    interp_xs_indices = intp.griddata(forecast_dates,
-                                      forecast_dates_indices,
-                                      higher_res_dates,
-                                      method='linear')
-    # Make a B-spline representation of the input data, then
-    # evaluate the function used the interpolated indices
-    tck = intp.splrep(forecast_dates_indices, forecast_values, k=order)
-    curve_ys = intp.splev(interp_xs_indices, tck)
-    try:
-        curve_ys = sig.savgol_filter(curve_ys, (win * fac)+1, order)
-    except Exception:
-        print "sig savgol filter failed with len",
-        print len(curve_ys), "window", win, "polyorder", order
-
-    # Finally, return the higher resolution date band, and the evaluation result.
-    return higher_res_dates, curve_ys
+        # Finally, return the higher resolution date band, and the evaluation result.
+        return higher_res_dates, curve_ys
+    return smoothing
 
 
 exercise_data, measurement_data = extract_data()
@@ -626,7 +605,6 @@ date_limits = min([date_limits_1[0], date_limits_2[0]]), max([date_limits_1[1], 
 # date_limits = [dates.datestr2num('2017-02-27'), date_limits[1]]
 
 
-smoothing_func = lambda d,v: autosmooth_with_interpolation(d, v, 13, 2)
 def select(m, u):
     if '%' in u: return True
     if 'lb' in u: return True
@@ -637,7 +615,7 @@ measurements_and_units = measurement_data.measurements_and_units()
 plotter = MeasurementPlotter(date_limits,
                              forecast_days=forecast_days,
                              forecast_past_sample_count=14,
-                             smoothing_func=exercise_smoothing,
+                             smoothing_func=noise_smoothing(21),
                              width=chart_width,
                              height=chart_height)
 
@@ -652,7 +630,7 @@ for measurement, units in measurements_and_units.items():
 
 plotter = WorkoutPlotter(date_limits,
                          forecast_days=forecast_days,
-                         smoothing_func=exercise_smoothing,
+                         smoothing_func=noise_smoothing(14),
                          width=chart_width,
                          height=chart_height,
                          spill_factor=1.5)
