@@ -10,6 +10,7 @@ import os
 import subprocess
 
 import numpy as np
+from scipy import interpolate as intp
 from scipy import signal as sig
 from scipy import stats
 import matplotlib
@@ -42,16 +43,16 @@ filename = "Fitness tracker.ods"
 # Each line on the table must describe an exercise set.
 # Each cell on the table starting at A2 must be in the following format:
 #   date    string           integer          float/formula    string
-measurements_f = "Measurements tracker"
+measurement_f = "Measurements tracker"
 
 # Sheet that contains exercises.
 # Sheet must be named as per this variable.
 # Refer to the README.md file for the format.
 # The sheet must have the following labels starting at A1:
-#   Date    Exercise name    Repetitions      Weight           Notes
+#   Date    Exercise name    Target Repetitions       Actual Repetitions     Weight           Notes
 # Each line on the table must describe a measurement (e.g. of your body).
 # Each cell on the table starting at A2 must be in the following format:
-#   date    string           float/formula    string           string
+#   date    string           float/formula            float/formula          float/formula    string
 exercise_f = "Exercise tracker"
 
 
@@ -161,23 +162,132 @@ def strpdate(d):
     return datetime.datetime.strptime(d, "%Y-%m-%d").date()
 
 
+class History(object):
+
+    def dates(self):
+        return self.data[:,0]
+
+    def filter_by_category(self, cat):
+        """Returns a reduced numpy array without items from the category."""
+        catidx = self.category_map[cat][0]
+        return self.data[self.data[:,1] == catidx]
+
+    def date_range(self):
+        dates = set(self.dates())
+        return min(dates), max(dates)
+
+
+class WorkoutHistory(History):
+
+    def __init__(self, data, exercise_map):
+        self.data = data
+        assert isinstance(exercise_map, collections.OrderedDict)
+        self.exercise_map = exercise_map
+        self.category_map = exercise_map
+        self.unit = "lb"
+
+    @classmethod
+    def from_csv(klass, csvreader):
+        exercises = collections.OrderedDict()
+        def yielder():
+            exerciseidx = np.float64(0.0)
+            for date, exercise, target_reps, actual_reps, weight, _ in csvreader:
+                try:
+                    float(target_reps)
+                    float(actual_reps)
+                except ValueError:
+                    continue
+                date = dates.datestr2num(date)
+                if exercise not in exercises:
+                    exercises[exercise] = [exerciseidx, date]
+                    exerciseidx += np.float(1.0)
+                else:
+                    exercises[exercise][1] = date
+                y = (date,
+                     exercises[exercise][0],
+                     target_reps,
+                     actual_reps,
+                     weight)
+                yield y
+        table = np.fromiter(yielder(), dtype='float64,float64,float64,float64,float64').view(np.float64).reshape(-1,5)
+        return klass(table, exercises)
+
+    def exercises(self):
+        return self.exercise_map.keys()
+
+    def latest_exercises(self):
+        res = list(sorted(self.exercise_map.items(), key=lambda k: -int(k[1][1])))
+        return [x[0] for x in res]
+
+
+class MeasurementHistory(History):
+
+    def __init__(self, data, measurement_map, unit_map):
+        self.data = data
+        assert isinstance(measurement_map, collections.OrderedDict)
+        assert isinstance(unit_map, collections.OrderedDict)
+        self.measurement_map = measurement_map
+        self.category_map = measurement_map
+        self.unit_map = unit_map
+
+    @classmethod
+    def from_csv(klass, csvreader):
+        measurements = collections.OrderedDict()
+        units = collections.OrderedDict()
+        def yielder():
+            measurementidx = np.float64(0.0)
+            unitsidx = np.float64(0.0)
+            for date, measurement, value, unit, _ in csvreader:
+                try:
+                    float(value)
+                except ValueError:
+                    continue
+                date = dates.datestr2num(date)
+                if measurement not in measurements:
+                    measurements[measurement] = [measurementidx, date]
+                    measurementidx += np.float(1.0)
+                else:
+                    measurements[measurement][1] = date
+                if unit not in units:
+                    units[unit] = unitsidx
+                    unitsidx += np.float(1.0)
+                y = (date,
+                     measurements[measurement][0],
+                     value,
+                     units[unit])
+                yield y
+        table = np.fromiter(yielder(), dtype='float64,float64,float64,float64').view("float64").reshape(-1,4)
+        return klass(table, measurements, units)
+
+    def measurements(self):
+        return self.measurement_map.keys()
+
+    def units_for_measurement(self, measurement):
+        unitdata = self.filter_by_category(measurement)[:,3]
+        rmap = dict([(v, k) for k, v in self.unit_map.items()])
+        return set(rmap[u] for u in unitdata)
+
+    def measurements_and_units(self):
+        return dict((m, self.units_for_measurement(m))
+                    for m in self.measurements())
+
+
 def extract_data():
-    measurements_p = os.path.join(folder, measurements_f + ".csv")
+    measurement_p = os.path.join(folder, measurement_f + ".csv")
     exercise_p = os.path.join(folder, exercise_f + ".csv")
 
     odsmtime = os.stat(os.path.join(folder, filename)).st_mtime
     try:
-        csvmtime1 = os.stat(measurements_p).st_mtime
+        csvmtime1 = os.stat(measurement_p).st_mtime
         csvmtime2 = os.stat(exercise_p).st_mtime
     except Exception:
         csvmtime1 = 0
         csvmtime2 = 0
 
-
     if odsmtime > csvmtime1 or odsmtime > csvmtime2:
         apply(subprocess.check_call, ([
             "ssconverter", "-m",
-            os.path.join(folder, filename) + ":" + measurements_f,
+            os.path.join(folder, filename) + ":" + measurement_f,
             measurements_p
         ],))
         apply(subprocess.check_call, ([
@@ -186,58 +296,12 @@ def extract_data():
             exercise_p
         ],))
 
-    reps_data = collections.OrderedDict()
-    weight_data = collections.OrderedDict()
-
     with open(exercise_p) as f:
-        reader = csv.reader(f, delimiter=",")
-        for date, exercise, reps, weight, _ in reader:
-            if date == "Date": continue
-            if exercise not in reps_data:
-                reps_data[exercise] = []
-            if exercise not in weight_data:
-                weight_data[exercise] = []
-            reps_data[exercise].append([
-                date,
-                float(reps),
-                "reps",
-            ])
-            weight_data[exercise].append([
-                date,
-                float(weight),
-                "lb"
-            ])
+        exercise_data = WorkoutHistory.from_csv(csv.reader(f, delimiter=","))
+    with open(measurement_p) as f:
+        measurement_data = MeasurementHistory.from_csv(csv.reader(f, delimiter=","))
 
-    measurements_data = collections.OrderedDict()
-
-    with open(measurements_p) as f:
-        reader = csv.reader(f, delimiter=",")
-        for date, measurement, value, unit, _ in reader:
-            if date == "Date": continue
-            if measurement not in measurements_data:
-                measurements_data[measurement] = []
-            if value == "": continue
-            measurements_data[measurement].append([
-                date,
-                float(value),
-                unit
-            ])
-
-    def numpyize(stuff):
-        res = collections.OrderedDict()
-        for k, v in stuff.items():
-            data = np.array([np.array(xi) for xi in v])
-            data = data.transpose()
-            data_dates = np.array([dates.datestr2num(x) for x in data[0]])
-            data_values = np.array([float(x) for x in data[1]])
-            res[k] = {
-                'dates': data_dates,
-                'values': data_values,
-                'unit': data[2][0]
-            }
-        return res
-
-    return [numpyize(x) for x in [reps_data, weight_data, measurements_data]]
+    return exercise_data, measurement_data
 
 
 def autosmooth(data_values, smoothing_window_len, polyorder):
@@ -256,286 +320,360 @@ def autosmooth(data_values, smoothing_window_len, polyorder):
         print len(data_values), "window", win, "polyorder", polyorder
 
 
-def preplot(values, width, height):
-    mindata = np.min(values)
-    data_zeros = np.array([mindata for x in values])
-    axes = Axes(width=width, height=height,
+def getaxes(width, height):
+    return Axes(width=width, height=height,
                 subplots_adjust_parms={'bottom': 0.11,
                                        'left': 0.05,
                                        'right': 0.99})
-    return data_zeros, axes
 
 
-def postplot(axes, title,
-             data_dates, data_values,
-             trend_line_width, trend_line_color,
-             date_limits, smoothing_window_len,
-             forecast_past_sample_count, forecast_days):
-    interp_dates = np.linspace(data_dates[0], data_dates[-1], data_dates[-1] - data_dates[0] + 1)
-    interp_values = np.interp(interp_dates, data_dates, data_values)
+class ActivityPlotter(object):
 
-    smooth_order = 2
-    date_limits = (date_limits[0], date_limits[-1] + forecast_days)
+    def __init__(self, date_limits=None,
+                 forecast_days=14, forecast_past_sample_count=3,
+                 width=12, height=3,
+                 smoothing_func=lambda *a: (None, None),
+                 trend_line_width=1, trend_line_color="darkslategray"):
+        self.date_limits = None
+        self.forecast_days = forecast_days
+        self.forecast_past_sample_count = forecast_past_sample_count
+        self.smoothing_func = smoothing_func
+        self.chart_width = width
+        self.chart_height = height
+        self.trend_line_width = trend_line_width
+        self.trend_line_color = trend_line_color
 
-    trend_values = None
-    smoothed_values = autosmooth(interp_values, smoothing_window_len, smooth_order)
-    if smoothed_values is not None:
-        axes.plot(interp_dates, smoothed_values, "--",
-                  linewidth=trend_line_width,
-                  color=trend_line_color,
-                  label="Average (over %s days)" % smoothing_window_len)
-
-        for d, v, o in [(data_dates, data_values, 1)]:
-            # Compute the general trend based on all data points.
-            factors = np.polyfit(d, v, o)
-            trend = np.poly1d(factors)
-            trend_dates = [data_dates[0], date_limits[-1]]
-            trend_values = [trend(t) for t in trend_dates]
-            axes.plot(trend_dates,
-                      trend_values,
-                      ":",
-                      linewidth=trend_line_width,
-                      color=trend_line_color,
-                      label="General trend")
-
-            # Compute the forecast based on the last forecast_past_sample_count.
-            factors = np.polyfit(d[-forecast_past_sample_count:],
-                                 v[-forecast_past_sample_count:],
-                                 o)
-            forecast = np.poly1d(factors)
-            forecast_dates = np.linspace(data_dates[-1],
-                                         date_limits[-1],
-                                         data_dates[-1] - date_limits[0] + 1)
-            forecast_values = [forecast(t) for t in forecast_dates]
-            diff = smoothed_values[-1] - forecast_values[0]
-            forecast_values = forecast_values + diff
-            axes.plot(forecast_dates,
-                      forecast_values,
-                      "--",
-                      linewidth=trend_line_width,
-                      color=trend_line_color,
-                      label="Forecast (from last %s samples)" % forecast_past_sample_count)
-
-    if title:
-        axes.set_title(title)
-
-    mindate = date_limits[0]
-    maxdate = date_limits[-1]
-    diff = maxdate - mindate
-    space_fac = 40
-    space = float(diff) / float(space_fac) / 2
-
-    minor_tick_dates = data_dates
-    minor_tick_dates = list(sorted(set(minor_tick_dates) | set([mindate, maxdate])))
-    minor_tick_dates = [x for x
-                        in minor_tick_dates
-                        if x >= mindate and x <= maxdate]
-    major_tick_dates = [x for x
-                        in np.linspace(mindate, maxdate, diff + 1)
-                        if dates.num2date(x).day == 1]
-    major_tick_dates = list(sorted(set(major_tick_dates) | set([mindate, maxdate])))
-    all_dates = list(sorted(set(minor_tick_dates) | set(major_tick_dates)))
-
-    xticklabels = ["" for _ in all_dates]
-    xtickmask = [False for _ in all_dates]
-    for i, d in enumerate(all_dates):
-        if d in major_tick_dates:
-            x = dates.num2date(d).date()
-            xtickmask[i] = True
-            if x.day == 1 or i == 0:
-                xticklabels[i] = x.strftime("%-d\n%b")
-            else:
-                xticklabels[i] = x.strftime("%-d")
-            lastset = i
-
-    for i in reversed(range(len(all_dates))):
-        x = dates.num2date(all_dates[i]).date()
-        s = space
-        if x.day >= 10:
-            s = s * 2
-        if xticklabels[i]: continue
-        if i + 1 < len(all_dates):
-            for j in range(i+1, len(all_dates)):
-                if xticklabels[j]: break
-            neighbor_date = dates.num2date(all_dates[j]).date()
-            if neighbor_date.day >= 10 and s == space:
-                s = s * 2
-            distance = abs((neighbor_date - x).days)
-            if distance < s: continue
-        if i > 0:
-            for j in range(i-1, -1, -1):
-                if xticklabels[j]:
-                    break
-            neighbor_date = dates.num2date(all_dates[j]).date()
-            if neighbor_date.day >= 10 and s == space:
-                s = s * 2
-            distance = abs((neighbor_date - x).days)
-            if distance < s: continue
-        xticklabels[i] = x.strftime("%-d")
-
-    major_tick_dates = [x for i, x in enumerate(all_dates) if xtickmask[i]]
-    minor_tick_dates = [x for i, x in enumerate(all_dates) if not xtickmask[i]]
-    major_xticklabels = [x for i, x in enumerate(xticklabels) if xtickmask[i]]
-    minor_xticklabels = [x for i, x in enumerate(xticklabels) if not xtickmask[i]]
-
-    axes.set_xlim(*date_limits)
-    axes.set_xticks(major_tick_dates, minor=False)
-    axes.set_xticks(minor_tick_dates, minor=True)
-    axes.set_xticklabels(major_xticklabels, minor=False, rotation=0, fontsize=8, ha="center")
-    axes.set_xticklabels(minor_xticklabels, minor=True, rotation=0, fontsize=8, ha="center")
-
-    miny = min(data_values)
-    maxy = max(data_values)
-    if smoothed_values is not None:
-        miny = min([miny, min(smoothed_values), min(trend_values), min(forecast_values)])
-        maxy = max([maxy, max(smoothed_values), max(trend_values), max(forecast_values)])
-
-    if maxy - miny < 1.0:
-        mean = (maxy - miny) / 2.0
-        miny = miny - mean
-        maxy = maxy + mean
-
-    maxy = maxy * 1.04
-    axes.set_ylim([miny, maxy])
-
-    axes.grid(True, color='#999999', axis="y")
-    axes.format_legend(fontsize=10, loc='upper center',
-                       frameon=True, ncol=5,
-                       bbox_to_anchor=(0.5, 1.02),
-                       edgecolor=(0,0,0,0),
-                       facecolor=(0,0,0,0))
-
-
-def daterange(data):
-    dates = set()
-    for k, v in data.items():
-        for date in v['dates']:
-            dates.add(date)
-    return min(dates), max(dates)
-
-
-def plot_measurements(measurement_data,
-                      date_limits,
-                      trend_line_width=1,
-                      trend_line_color="darkslategray",
-                      width=12,
-                      height=3,
-                      title=None,
-                      smoothing_window_len=13,
-                      forecast_days=14):
-    date_limits = (date_limits[0], date_limits[-1])
-
-    data_zeros, axes = preplot(measurement_data['values'], width, height)
-    axes.plot(measurement_data['dates'], measurement_data['values'],
-              label="Sample data")
-
-    postplot(axes, title, measurement_data['dates'],
-             measurement_data['values'], trend_line_width,
-             trend_line_color, date_limits, smoothing_window_len,
-             forecast_past_sample_count=14,
-             forecast_days=forecast_days)
-
-    return axes
-
-
-def plot_exercises(weight_data,
-                   reps_data,
-                   date_limits,
-                   trend_line_width=1,
-                   trend_line_color="darkslategray",
-                   width=12,
-                   height=3,
-                   spill_factor = 1.0,
-                   title=None,
-                   smoothing_window_len=13,
-                   forecast_days=14):
-    date_limits = (date_limits[0], date_limits[-1])
-
-    _, axes = preplot(weight_data['values'], width, height)
-
-    reps_mode = stats.mode(reps_data['values'])[0]
-
-    def getcolor(x):
-        if x >= reps_mode:
-            return 'g'
-        hue = x / reps_mode * 0.1
-        return matplotlib.colors.hsv_to_rgb([hue, 1, 1])
-
-    thedates = []
-    theweights = []
-    thecolors = []
-    thewidths = []
-    reps_in_one_day = 0
-    for date, g in itertools.groupby(zip(weight_data['dates'],
-                                     weight_data['values'],
-                                     reps_data['values']), lambda m: m[0]):
-        g = list(g)
-        reps_in_one_day = max([reps_in_one_day, len(g)])
-        if reps_in_one_day > 1:
-            thedates.extend(np.linspace(date - (0.5 * spill_factor),
-                                        date + (0.5 * spill_factor),
-                                        reps_in_one_day + 1)[:-1])
+    def autodetect_date_limits(self, history):
+        if self.date_limits:
+            date_limits = (self.date_limits[0], self.date_limits[-1])
         else:
-            thedates.append(date - (0.5*spill_factor))
-        while len(g) < reps_in_one_day:
-            g.append([0.0, 0.0, 0.0])
-        theweights.extend([x[1] for x in g])
-        thecolors.extend([getcolor(x[2]) for x in g])
-        thewidths.extend([1.0 / reps_in_one_day * spill_factor for _ in enumerate(g)])
+            now = dates.date2num(datetime.datetime.today())
+            date_limits = list(history.date_range())
+            date_limits[1] = min((date_limits[1], now))
+        return date_limits
 
-    axes.bar(thedates,
-             theweights,
-             thewidths,
-             color=thecolors,
-             label="Sample data",
-             linewidth=0)
+    def postplot(self, axes, title, minor_tick_dates,
+                forecast_dates, forecast_values,
+                trend_line_width, trend_line_color,
+                date_limits, smoothing_func,
+                forecast_past_sample_count, forecast_days):
+        date_limits = (date_limits[0], date_limits[-1] + forecast_days)
 
-    weight_data = mean_over_time(weight_data)
+        trend_values = None
+        interp_dates, smoothed_values = smoothing_func(forecast_dates, forecast_values)
+        if smoothed_values is not None:
+            axes.plot(interp_dates, smoothed_values, "--",
+                    linewidth=trend_line_width,
+                    color=trend_line_color,
+                    label="Smoothed")
 
-    postplot(axes, title, weight_data['dates'],
-             weight_data['values'], trend_line_width,
-             trend_line_color, date_limits, smoothing_window_len,
-             forecast_past_sample_count=3,
-             forecast_days=forecast_days)
+            for d, v, o in [(forecast_dates, forecast_values, 1)]:
+                # Compute the general trend based on all data points.
+                factors = np.polyfit(d, v, o)
+                trend = np.poly1d(factors)
+                trend_dates = [forecast_dates[0], date_limits[-1]]
+                trend_values = [trend(t) for t in trend_dates]
+                axes.plot(trend_dates,
+                        trend_values,
+                        ":",
+                        linewidth=trend_line_width,
+                        color=trend_line_color,
+                        label="General trend")
 
-    return axes
+                # Compute the forecast based on the last forecast_past_sample_count.
+                factors = np.polyfit(d[-forecast_past_sample_count:],
+                                    v[-forecast_past_sample_count:],
+                                    o)
+                forecast = np.poly1d(factors)
+                forecast_dates = np.linspace(forecast_dates[-1],
+                                            date_limits[-1],
+                                            forecast_dates[-1] - date_limits[0] + 1)
+                forecast_values = [forecast(t) for t in forecast_dates]
+                diff = smoothed_values[-1] - forecast_values[0]
+                forecast_values = forecast_values + diff
+                axes.plot(forecast_dates,
+                        forecast_values,
+                        "--",
+                        linewidth=trend_line_width,
+                        color=trend_line_color,
+                        label="Forecast (from last %s samples)" % forecast_past_sample_count)
 
-reps_data, weight_data, measurement_data = extract_data()
-date_limits = daterange(measurement_data)
+        if title:
+            axes.set_title(title)
+
+        mindate = date_limits[0]
+        maxdate = date_limits[-1]
+        diff = maxdate - mindate
+        space_fac = 40  # FIXME: this factor should scale with the size of the plot.
+                        # It is tricky to get that shit info.
+        space = float(diff) / float(space_fac) / 2
+
+        minor_tick_dates = minor_tick_dates
+        minor_tick_dates = list(sorted(set(minor_tick_dates) | set([mindate, maxdate])))
+        minor_tick_dates = [x for x
+                            in minor_tick_dates
+                            if x >= mindate and x <= maxdate]
+        major_tick_dates = [x for x
+                            in np.linspace(mindate, maxdate, diff + 1)
+                            if dates.num2date(x).day == 1]
+        major_tick_dates = list(sorted(set(major_tick_dates) | set([mindate, maxdate])))
+        minor_tick_dates = list(sorted(set(minor_tick_dates) | set(major_tick_dates)))
+
+        xticklabels = ["" for _ in minor_tick_dates]
+        xtickmask = [False for _ in minor_tick_dates]
+        for i, d in enumerate(minor_tick_dates):
+            if d in major_tick_dates:
+                x = dates.num2date(d).date()
+                xtickmask[i] = True
+                if x.day == 1 or i == 0:
+                    xticklabels[i] = x.strftime("%-d\n%b")
+                else:
+                    xticklabels[i] = x.strftime("%-d")
+                lastset = i
+
+        for i in reversed(range(len(minor_tick_dates))):
+            x = dates.num2date(minor_tick_dates[i]).date()
+            s = space
+            if x.day >= 10:
+                s = s * 2
+            if xticklabels[i]: continue
+            if i + 1 < len(minor_tick_dates):
+                for j in range(i+1, len(minor_tick_dates)):
+                    if xticklabels[j]: break
+                neighbor_date = dates.num2date(minor_tick_dates[j]).date()
+                if neighbor_date.day >= 10 and s == space:
+                    s = s * 2
+                distance = abs((neighbor_date - x).days)
+                if distance < s: continue
+            if i > 0:
+                for j in range(i-1, -1, -1):
+                    if xticklabels[j]:
+                        break
+                neighbor_date = dates.num2date(minor_tick_dates[j]).date()
+                if neighbor_date.day >= 10 and s == space:
+                    s = s * 2
+                distance = abs((neighbor_date - x).days)
+                if distance < s: continue
+            xticklabels[i] = x.strftime("%-d")
+
+        major_tick_dates = [x for i, x in enumerate(minor_tick_dates) if xtickmask[i]]
+        minor_tick_dates = [x for i, x in enumerate(minor_tick_dates) if not xtickmask[i]]
+        major_xticklabels = [x for i, x in enumerate(xticklabels) if xtickmask[i]]
+        minor_xticklabels = [x for i, x in enumerate(xticklabels) if not xtickmask[i]]
+
+        axes.set_xlim(*date_limits)
+        axes.set_xticks(major_tick_dates, minor=False)
+        axes.set_xticks(minor_tick_dates, minor=True)
+        axes.set_xticklabels(major_xticklabels, minor=False, rotation=0, fontsize=8, ha="center")
+        axes.set_xticklabels(minor_xticklabels, minor=True, rotation=0, fontsize=8, ha="center")
+
+        axes.grid(True, color='#999999', axis="y")
+        axes.format_legend(fontsize=10, loc='upper center',
+                           frameon=True, ncol=5,
+                           bbox_to_anchor=(0.5, 1.02),
+                           edgecolor=(0,0,0,0),
+                           facecolor=(0,0,0,0))
+
+
+class MeasurementPlotter(ActivityPlotter):
+
+    def plot(self, history, measurement):
+        data = history.filter_by_category(measurement)
+        units = history.units_for_measurement(measurement)
+        axes = getaxes(self.chart_width, self.chart_height)
+
+        data_dates, data_values = data[:,0], data[:,2]
+
+        axes.plot(data_dates, data_values, label="Sample data")
+
+        date_limits = self.autodetect_date_limits(history)
+        title = measurement + " (" + ", ".join(units) + ")"
+
+        all_dates = np.unique(data[:,0])
+
+        self.postplot(axes, title,
+                      all_dates, data_dates, data_values,
+                      self.trend_line_width,
+                      self.trend_line_color, date_limits,
+                      smoothing_func=self.smoothing_func,
+                      forecast_past_sample_count=self.forecast_past_sample_count,
+                      forecast_days=self.forecast_days)
+        return axes
+
+
+class WorkoutPlotter(ActivityPlotter):
+
+    def __init__(self, *args, **kwargs):
+        self.spill_factor = 1.0
+        if "spill_factor" in kwargs:
+            self.spill_factor = kwargs['spill_factor']
+            del kwargs['spill_factor']
+        apply(ActivityPlotter.__init__, [self] + list(args), kwargs)
+
+    def plot(self, history, exercise):
+        data = history.filter_by_category(exercise)
+
+        def getcolor(target, actual):
+            if actual >= target:
+                return 'g'
+            hue = actual / target * 0.1
+            return matplotlib.colors.hsv_to_rgb([hue, 1, 1])
+
+        thedates = []
+        theweights = []
+        thecolors = []
+        thewidths = []
+        maxweights = []
+        maxdates = []
+        sets_in_one_day = 0
+        for date, g in itertools.groupby(data, lambda m: m[0]):
+            g = np.fromiter(g, dtype='float64,float64,float64,float64,float64').view(np.float64).reshape(-1,5)
+            sets_in_one_day = max([sets_in_one_day, len(g)])
+            if sets_in_one_day > 1:
+                thedates.extend(np.linspace(date - (0.5 * self.spill_factor),
+                                            date + (0.5 * self.spill_factor),
+                                            sets_in_one_day + 1)[:-1])
+            else:
+                thedates.append(date - (0.5*self.spill_factor))
+            while len(g) < sets_in_one_day:
+                g = np.vstack((g, np.array([date, 0, 0.0, 0.0, 0.0])))
+            theweights.extend(g[:,4])
+            thecolors.extend([getcolor(x[2], x[3]) for x in g])
+            thewidths.extend([1.0 / sets_in_one_day * self.spill_factor for _ in enumerate(g)])
+            
+            # The following code block computes the maximum weights that I finished in
+            # a particular exercise for the day.  We need that value in order to supply
+            # it to the forecasting function so that the user can have an accurate
+            # forecast of where the exercise is going, since it's pointless to forecast
+            # anything based on lifting weights so heavy, the user didn't finish.
+            maxweight = max(g[:,4])
+            mask_unfinished = g[:,2] > g[:,3]
+            finished_weights = [ x for x in g[:,4] if x not in g[mask_unfinished,4] ]
+            if finished_weights and all(finished_weights == maxweight):
+                maxweight = max(finished_weights)
+                if maxweight > 0.0:
+                    maxweights.append(max(finished_weights))
+                    maxdates.append(date)
+
+        axes = getaxes(self.chart_width, self.chart_height)
+        axes.bar(thedates,
+                 theweights,
+                 thewidths,
+                 color=thecolors,
+                 label="Sample data",
+                 linewidth=0)
+
+        date_limits = self.autodetect_date_limits(history)
+        title = exercise + " (" + history.unit + ")"
+
+        all_dates = np.unique(data[:,0])
+
+        self.postplot(axes, title,
+                      all_dates, maxdates, maxweights,
+                      self.trend_line_width,
+                      self.trend_line_color, date_limits,
+                      smoothing_func=self.smoothing_func,
+                      forecast_past_sample_count=self.forecast_past_sample_count,
+                      forecast_days=self.forecast_days)
+        return axes
+
+
+def autosmooth_with_interpolation(forecast_dates, forecast_values, smoothing_window_len, smooth_order):
+    interp_dates = np.linspace(forecast_dates[0], forecast_dates[-1], forecast_dates[-1] - forecast_dates[0] + 1)
+    interp_values = np.interp(interp_dates, forecast_dates, forecast_values)
+    return interp_dates, autosmooth(interp_values, smoothing_window_len, smooth_order)
+
+
+def exercise_smoothing(forecast_dates, forecast_values):
+    win = 15
+    order = 3
+    fac = 4
+    # Make an index for each input date (all irregularly-spaced).
+    forecast_dates_indices = np.indices((len(forecast_dates),))[0]
+    # Generate a higher-resolution date band from the input date range.
+    higher_res_dates = np.linspace(forecast_dates[0],
+                                   forecast_dates[-1],
+                                   fac*(forecast_dates[-1] - forecast_dates[0]) + 1)
+    # Interpolate the indices (each corresponding to a date) to a
+    # specific higher-resolution date band.
+    interp_xs_indices = intp.griddata(forecast_dates,
+                                      forecast_dates_indices,
+                                      higher_res_dates,
+                                      method='linear')
+    # Make a B-spline representation of the input data, then
+    # evaluate the function used the interpolated indices
+    tck = intp.splrep(forecast_dates_indices, forecast_values, k=order)
+    curve_ys = intp.splev(interp_xs_indices, tck)
+    try:
+        curve_ys = sig.savgol_filter(curve_ys, (win * fac)+1, order)
+    except Exception:
+        print "sig savgol filter failed with len",
+        print len(curve_ys), "window", win, "polyorder", order
+
+    # Finally, return the higher resolution date band, and the evaluation result.
+    return higher_res_dates, curve_ys
+
+
+exercise_data, measurement_data = extract_data()
+
+
 forecast_days = 14
-chart_width = 9
+chart_width = 12
+chart_height = 4
+date_limits_1 = measurement_data.date_range()
+date_limits_2 = exercise_data.date_range()
+date_limits = min([date_limits_1[0], date_limits_2[0]]), max([date_limits_1[1], date_limits_2[1]])
 # date_limits = [dates.datestr2num('2017-02-27'), date_limits[1]]
 
 
-def sortorder(m):
-    if m[1]['unit'] == "%": return 0
-    if m[1]['unit'] == "lb": return 1
-    if "waist" in m[0].lower(): return 2
-    return 3 + measurement_data.keys().index(m[0])
-sorted_measurement_data = list(sorted(measurement_data.items(), key=sortorder))
-for typ, data in sorted_measurement_data:
-    if sortorder((typ, data)) > 3: continue
-    plot_measurements(data, date_limits,
-                      title=typ + " (" + data['unit'] + ")",
-                      forecast_days=forecast_days,
-                      width=chart_width)
+smoothing_func = lambda d,v: autosmooth_with_interpolation(d, v, 13, 2)
+def select(m, u):
+    if '%' in u: return True
+    if 'lb' in u: return True
+    if "waist" in m.lower(): return True
+    return False
+
+measurements_and_units = measurement_data.measurements_and_units()
+plotter = MeasurementPlotter(date_limits,
+                             forecast_days=forecast_days,
+                             forecast_past_sample_count=14,
+                             smoothing_func=exercise_smoothing,
+                             width=chart_width,
+                             height=chart_height)
+
+for measurement, units in measurements_and_units.items():
+    if not select(measurement, units): continue
+    plotter.plot(measurement_data, measurement)
+
+for measurement, units in measurements_and_units.items():
+    if select(measurement, units): continue
+    plotter.plot(measurement_data, measurement)
 
 
+plotter = WorkoutPlotter(date_limits,
+                         forecast_days=forecast_days,
+                         smoothing_func=exercise_smoothing,
+                         width=chart_width,
+                         height=chart_height,
+                         spill_factor=1.5)
 
-sorted_measurement_data = list(sorted(measurement_data.items(), key=sortorder))
-for typ, data in sorted_measurement_data:
-    if sortorder((typ, data)) <= 3: continue
-    plot_measurements(data, date_limits,
-                      title=typ + " (" + data['unit'] + ")",
-                      forecast_days=forecast_days,
-                      width=chart_width)
+for exercise in exercise_data.latest_exercises():
+    plotter.plot(exercise_data, exercise)
 
-
-sortorder = lambda m: -m[1]['dates'][-1]
-sorted_measurement_data = list(sorted(reps_data.items(), key=sortorder))
-for typ, _ in sorted_measurement_data:
-    plot_exercises(weight_data[typ], reps_data[typ], date_limits,
-                   title=typ + " (" + weight_data[typ]['unit'] + ")",
-                   forecast_days=forecast_days,
-                   width=chart_width,
-                   spill_factor=1.5)
+# TO DO:
+# * Plan my future workouts.
+# * Graphically dim data beyond today, or data that does
+#   not have reps yet, in preparation for planning my
+#   future workouts.
+# * Draw breakthrough lines.  When a weight is
+#   achieved, a horizontal line needs to be drawn,
+#   starting at the X value of the breakthrough,
+#   and ending at the previous breakthrough
+#   value, with a dotted or otherwise visually
+#   noncluttering line, that dims in intensity
+#   from right to left.  These breakthrough lines
+#   are the reason I live for.  When I draw the
+#   breakthrough lines, more stuff about my
+#   progress will become evident, and I will feel
+#   more motivated to continue making new
+#   breakthroughs.

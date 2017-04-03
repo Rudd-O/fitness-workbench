@@ -22,10 +22,10 @@ Create your fitness tracker spreadsheet according to these instructions:
     * date  /  string    /   float or formula   /    string    /     string
 * Create a sheet named *Exercise tracker*.
   * The sheet must have the following labels starting at A1:
-    * Date  |  Exercise name  |  Repetitions  |  Weight  |  Notes
+    * Date  |  Exercise name  |  Target repetitions  |  Actual repetitions  |  Weight           |  Notes
   * Start tracking exercises.  Each line on the table must describe a set.
   * For reference, each cell on the table starting at A2 must be in the following format:
-    * date  /  string     /   integer  /  float or formula  /      string
+    * date  /  string         /  integer             /  integer             / float or formula  /  string
 * Any other sheets are your own to do whatever you want with.
 
 Adjust the variables at the top of the workbench to point the workbench to your fitness tracker spreadsheet.
