@@ -466,18 +466,16 @@ class MeasurementPlotter(ActivityPlotter):
         axes = getaxes(self.chart_width, self.chart_height)
 
         data_dates, data_values = data[:,0], data[:,2]
-
         axes.plot(data_dates, data_values, label="Sample data")
 
-        date_limits = self.autodetect_date_limits(history)
         title = measurement + " (" + ", ".join(units) + ")"
 
-        all_dates = np.unique(data[:,0])
-
         self.postplot(axes, title,
-                      all_dates, data_dates, data_values,
+                      np.unique(data[:,0]),
+                      data_dates, data_values,
                       self.trend_line_width,
-                      self.trend_line_color, date_limits,
+                      self.trend_line_color,
+                      self.autodetect_date_limits(history),
                       smoothing_func=self.smoothing_func,
                       forecast_past_sample_count=self.forecast_past_sample_count,
                       forecast_days=self.forecast_days)
@@ -549,12 +547,11 @@ class WorkoutPlotter(ActivityPlotter):
         date_limits = self.autodetect_date_limits(history)
         title = exercise + " (" + history.unit + ")"
 
-        all_dates = np.unique(data[:,0])
-
         self.postplot(axes, title,
-                      all_dates, maxdates, maxweights,
+                      np.unique(data[:,0]), maxdates, maxweights,
                       self.trend_line_width,
-                      self.trend_line_color, date_limits,
+                      self.trend_line_color,
+                      self.autodetect_date_limits(history),
                       smoothing_func=self.smoothing_func,
                       forecast_past_sample_count=self.forecast_past_sample_count,
                       forecast_days=self.forecast_days)
