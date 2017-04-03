@@ -318,7 +318,7 @@ class ActivityPlotter(object):
                  width=12, height=3,
                  smoothing_func=lambda *a: (None, None),
                  trend_line_width=1, trend_line_color="darkslategray"):
-        self.date_limits = None
+        self.date_limits = date_limits
         self.forecast_days = forecast_days
         self.forecast_past_sample_count = forecast_past_sample_count
         self.smoothing_func = smoothing_func
@@ -331,7 +331,6 @@ class ActivityPlotter(object):
         if self.date_limits:
             date_limits = (self.date_limits[0], self.date_limits[-1])
         else:
-            now = dates.date2num(datetime.datetime.today())
             date_limits = list(history.date_range())
             date_limits[1] = min((date_limits[1], now))
         return date_limits
@@ -599,9 +598,8 @@ exercise_data, measurement_data = extract_data()
 forecast_days = 14
 chart_width = 12
 chart_height = 4
-date_limits_1 = measurement_data.date_range()
-date_limits_2 = exercise_data.date_range()
-date_limits = min([date_limits_1[0], date_limits_2[0]]), max([date_limits_1[1], date_limits_2[1]])
+date_limits = measurement_data.date_range() + exercise_data.date_range()
+date_limits = min(date_limits), max(date_limits)
 # date_limits = [dates.datestr2num('2017-02-27'), date_limits[1]]
 
 
