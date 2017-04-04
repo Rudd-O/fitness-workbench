@@ -288,7 +288,7 @@ def extract_data():
         apply(subprocess.check_call, ([
             "ssconverter", "-m",
             os.path.join(folder, filename) + ":" + measurement_f,
-            measurements_p
+            measurement_p
         ],))
         apply(subprocess.check_call, ([
             "ssconverter", "-m",
@@ -634,7 +634,6 @@ for exercise in exercise_data.latest_exercises():
     plotter.plot(exercise_data, exercise)
 
 # TO DO:
-# * Plan my future workouts.
 # * Graphically dim data beyond today, or data that does
 #   not have reps yet, in preparation for planning my
 #   future workouts.
