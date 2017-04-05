@@ -561,12 +561,15 @@ def noise_smoothing(win):
     def smoothing(forecast_dates, forecast_values):
         order = 3
         fac = 4
+
         # Make an index for each input date (all irregularly-spaced).
         forecast_dates_indices = np.indices((len(forecast_dates),))[0]
+
         # Generate a higher-resolution date band from the input date range.
         higher_res_dates = np.linspace(forecast_dates[0],
-                                    forecast_dates[-1],
-                                    fac*(forecast_dates[-1] - forecast_dates[0]) + 1)
+                                       forecast_dates[-1],
+                                       fac*(forecast_dates[-1] - forecast_dates[0]) + 1)
+
         # Interpolate the indices (each corresponding to a date) to a
         # specific higher-resolution date band.
         interp_xs_indices = intp.griddata(forecast_dates,
