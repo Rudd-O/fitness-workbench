@@ -573,18 +573,25 @@ def noise_smoothing(win):
         # Interpolate the indices (each corresponding to a date) to a
         # specific higher-resolution date band.
         interp_xs_indices = intp.griddata(forecast_dates,
-                                        forecast_dates_indices,
-                                        higher_res_dates,
-                                        method='linear')
-        # Make a B-spline representation of the input data, then
-        # evaluate the function used the interpolated indices
-        tck = intp.splrep(forecast_dates_indices, forecast_values, k=order)
-        curve_ys = intp.splev(interp_xs_indices, tck)
+                                          forecast_dates_indices,
+                                          higher_res_dates,
+                                          method='linear')
+
+        # # Make a B-spline representation of the input data, then
+        # # evaluate the function using the interpolated indices.
+        # tck = intp.splrep(forecast_dates_indices, forecast_values, k=order)
+        # curve_ys = intp.splev(interp_xs_indices, tck)
+
+        # Make a linearly interpolated representation of the input data,
+        # then evaluate the function using the interpolated indices.
+        tck = intp.interp1d(forecast_dates_indices, forecast_values)
+        curve_ys = tck(interp_xs_indices)
         try:
-            curve_ys = sig.savgol_filter(curve_ys, (win * fac)+1, order)
+            curve_ys = sig.savgol_filter(curve_ys, (win * fac) + 1, order)
         except Exception:
             print "sig savgol filter failed with len",
-            print len(curve_ys), "window", win, "polyorder", order
+            print len(curve_ys), "win+fac", (win * fac) + 1, "polyorder", order
+            return None, None
 
         # Finally, return the higher resolution date band, and the evaluation result.
         return higher_res_dates, curve_ys
