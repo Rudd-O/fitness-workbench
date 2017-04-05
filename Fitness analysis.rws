@@ -530,12 +530,10 @@ class WorkoutPlotter(ActivityPlotter):
             # anything based on lifting weights so heavy, the user didn't finish.
             maxweight = max(g[:,4])
             mask_unfinished = g[:,2] > g[:,3]
-            finished_weights = [ x for x in g[:,4] if x not in g[mask_unfinished,4] ]
-            if finished_weights and all(finished_weights == maxweight):
-                maxweight = max(finished_weights)
-                if maxweight > 0.0:
-                    maxweights.append(max(finished_weights))
-                    maxdates.append(date)
+            unfinished_weights = [ x for x in g[:,4] if x in g[mask_unfinished,4] ]
+            if maxweight > 0.0 and maxweight not in unfinished_weights:
+                maxweights.append(maxweight)
+                maxdates.append(date)
 
         axes = getaxes(self.chart_width, self.chart_height)
         axes.bar(thedates,
