@@ -314,7 +314,8 @@ def getaxes(width, height):
 class ActivityPlotter(object):
 
     def __init__(self, date_limits=None,
-                 forecast_days=14, forecast_past_sample_count=3,
+                 forecast_days=14,
+                 forecast_past_sample_count=3,
                  width=12, height=3,
                  smoothing_func=lambda *a: (None, None),
                  trend_line_width=1, trend_line_color="darkslategray"):
@@ -346,9 +347,9 @@ class ActivityPlotter(object):
         interp_dates, smoothed_values = smoothing_func(forecast_dates, forecast_values)
         if smoothed_values is not None:
             axes.plot(interp_dates, smoothed_values, "--",
-                    linewidth=trend_line_width,
-                    color=trend_line_color,
-                    label="Smoothed")
+                      linewidth=trend_line_width,
+                      color=trend_line_color,
+                      label="Smoothed")
 
             for d, v, o in [(forecast_dates, forecast_values, 1)]:
                 # Compute the general trend based on all data points.
@@ -357,29 +358,29 @@ class ActivityPlotter(object):
                 trend_dates = [forecast_dates[0], date_limits[-1]]
                 trend_values = [trend(t) for t in trend_dates]
                 axes.plot(trend_dates,
-                        trend_values,
-                        ":",
-                        linewidth=trend_line_width,
-                        color=trend_line_color,
-                        label="General trend")
+                          trend_values,
+                          ":",
+                          linewidth=trend_line_width,
+                          color=trend_line_color,
+                          label="General trend")
 
                 # Compute the forecast based on the last forecast_past_sample_count.
                 factors = np.polyfit(d[-forecast_past_sample_count:],
-                                    v[-forecast_past_sample_count:],
-                                    o)
+                                     v[-forecast_past_sample_count:],
+                                     o)
                 forecast = np.poly1d(factors)
                 forecast_dates = np.linspace(forecast_dates[-1],
-                                            date_limits[-1],
-                                            forecast_dates[-1] - date_limits[0] + 1)
+                                             date_limits[-1],
+                                             forecast_dates[-1] - date_limits[0] + 1)
                 forecast_values = [forecast(t) for t in forecast_dates]
                 diff = smoothed_values[-1] - forecast_values[0]
                 forecast_values = forecast_values + diff
                 axes.plot(forecast_dates,
-                        forecast_values,
-                        "--",
-                        linewidth=trend_line_width,
-                        color=trend_line_color,
-                        label="Forecast (from last %s samples)" % forecast_past_sample_count)
+                          forecast_values,
+                          "--",
+                          linewidth=trend_line_width,
+                          color=trend_line_color,
+                          label="Forecast (from last %s samples)" % forecast_past_sample_count)
 
         if title:
             axes.set_title(title)
