@@ -3,6 +3,7 @@
 # vim: tabstop=8 expandtab shiftwidth=4 softtabstop=4
 
 import collections
+import copy
 import csv
 import datetime
 import itertools
@@ -119,6 +120,14 @@ class Axes(RecordedObject, custom_result.CustomResult):
 
     def format_legend(self, *args, **kwargs):
         self.__legend = (args, kwargs)
+
+    def __copy__(self):
+        new = self.__class__(display=self.display,
+                             width=self.figure_width,
+                             height=self.figure_height,
+                             subplots_adjust_parms=self.subplots_adjust_parms)
+        new._recreation_calls = copy.copy(self._recreation_calls)
+        return new
 
 
 def filter_method(baseclass, name):
@@ -616,7 +625,7 @@ def mustgodown(m, u):
     return False
 
 measurements_and_units = measurement_data.measurements_and_units()
-plotter = MeasurementPlotter(date_limits,
+mplotter = MeasurementPlotter(date_limits,
                              forecast_days=forecast_days,
                              forecast_past_sample_count=14,
                              smoothing_func=noise_smoothing(14),
@@ -625,14 +634,14 @@ plotter = MeasurementPlotter(date_limits,
 
 for measurement, units in measurements_and_units.items():
     if not mustgodown(measurement, units): continue
-    plotter.plot(measurement_data, measurement)
+    mplotter.plot(measurement_data, measurement)
 
 for measurement, units in measurements_and_units.items():
     if mustgodown(measurement, units): continue
-    plotter.plot(measurement_data, measurement)
+    mplotter.plot(measurement_data, measurement)
 
 
-plotter = WorkoutPlotter(date_limits,
+wplotter = WorkoutPlotter(date_limits,
                          forecast_days=forecast_days,
                          forecast_past_sample_count=3,
                          smoothing_func=noise_smoothing(14),
@@ -641,9 +650,12 @@ plotter = WorkoutPlotter(date_limits,
                          spill_factor=1.5)
 
 for exercise in exercise_data.latest_exercises():
-    plotter.plot(exercise_data, exercise)
+    wplotter.plot(exercise_data, exercise)
 
 # TO DO:
+# * Plot total weight lifted in a session (stacked bars
+#   per exercise) so I can visually correlate with body
+#   weight and body fat percentages.
 # * Graphically dim data beyond today, or data that does
 #   not have reps yet, in preparation for planning my
 #   future workouts.
